@@ -883,7 +883,7 @@ async function enterApp(buildingKey, period, name){
       if(snap.exists){
         STORE[buildingKey][period] = snap.data();
       } else {
-        const fresh = emptyBuildingData();
+        const fresh = seedFor(buildingKey, period) || emptyBuildingData();
         fresh.meta.month = period.split('-')[1];
         fresh.meta.year = period.split('-')[0];
         fresh.meta.preparedBy = name;
@@ -1125,6 +1125,11 @@ function renderTenants(el){
       <div class="kpi light"><div class="val" style="font-size:19px;">${esc(d.info.leased)||'—'}</div><div class="lbl">Sàn cho thuê / tổng (nhập ở mục I)</div></div>
     </div>
     <div class="pdf-note" style="margin-bottom:10px;">Sàn trống lấy Tổng diện tích khai ở mục I trừ tổng DT các khách thuê bên dưới — số âm nghĩa là DT khách thuê đã vượt tổng diện tích khai báo, cần kiểm tra lại. Trạng thái HĐ tự động tính từ "Ngày kết thúc thuê" (giống cách tính ở mục Hợp đồng dịch vụ). Nếu khách đã bị thu hồi mặt bằng trước hạn hợp đồng, trạng thái ở đây vẫn hiện theo ngày trên giấy tờ; ghi chú việc thu hồi ở mục II hoặc III.</div>
+    ${(d.tenants.length===0 && seedFor(STATE.building, STATE.period)) ? `
+    <div class="pdf-note" style="margin-bottom:10px;background:#eef6ff;border:1px solid #9cc2ea;padding:8px 10px;border-radius:6px;">
+      Có dữ liệu mẫu (từ file Excel đã nhập) cho kỳ báo cáo này nhưng chưa được nạp vào báo cáo hiện tại.
+      <button class="btn" style="margin-left:8px;" onclick="loadSeedIntoCurrent()">Nạp dữ liệu mẫu vào báo cáo này</button>
+    </div>` : ''}
     <div style="overflow-x:auto;">
     <table><thead><tr>
       <th style="width:5%">#</th><th style="width:16%">Tên khách thuê</th><th style="width:6%">Tầng</th>
@@ -1179,6 +1184,15 @@ function renderTenants(el){
       </td>
       <td><button class="btn danger" onclick="removeItem('complaints',${i},'phản ánh')">✕</button></td>
     </tr>`).join('');
+}
+function loadSeedIntoCurrent(){
+  const seeded = seedFor(STATE.building, STATE.period);
+  if(!seeded) return;
+  const d = data();
+  if(d.tenants.length===0) d.tenants = seeded.tenants;
+  if(d.vehicle.length===0) d.vehicle = seeded.vehicle;
+  renderSection();
+  scheduleSave();
 }
 function addTenant(){ data().tenants.push({name:'',floor:'',area:'',startDate:'',endDate:'',mgmtFee:'',contact:'',note:''}); renderSection(); }
 function addComplaint(){ data().complaints.push({content:'',from:'',date:'',status:'pending'}); renderSection(); }
