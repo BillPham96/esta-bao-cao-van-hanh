@@ -195,7 +195,7 @@
   .pdf-table th{background:var(--sand);color:var(--espresso);padding:5px 7px;text-align:left;font-weight:700;}
   .pdf-table td{padding:5px 7px;border-bottom:1px solid var(--sand);}
   .pdf-table tr:nth-child(even) td{background:rgba(245,236,208,.35);}
-  .pdf-note{font-size:10.5px;color:var(--bronze);}
+  .pdf-note{font-size:10.5px;color:var(--bronze);}     .pdf-highlight-item{padding:7px 0 8px 10px;border-bottom:1px dashed var(--sand);border-left:3px solid var(--forest);}     .pdf-highlight-item.pending{border-left-color:var(--gold);}     .pdf-highlight-item:last-child{border-bottom:none;}     .pdf-highlight-text{font-size:10.5px;color:var(--bronze);line-height:1.4;}     .pdf-highlight-images{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0 20px;}     .pdf-highlight-images img{width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--sand);display:block;}
   .pdf-badge-row{display:flex;gap:8px;margin-bottom:8px;}
   .pdf-badge{border-radius:4px;padding:6px 12px;font-size:10.5px;font-weight:700;flex:1;text-align:center;}
   .pdf-sign-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px;}
@@ -1708,7 +1708,7 @@ function buildingPdfHTML(bKey){
   const d = dataFor(bKey, STATE.period);
   const o = computeOverview(d);
   const e = (v)=> esc(v===undefined||v===null||v==='' ? '—' : v);
-  const imgRow = (images)=> (images&&images.length) ? images.map(src=>`<img src="${src}" crossorigin="anonymous" style="width:64px;height:64px;object-fit:cover;border-radius:3px;margin:2px 4px 2px 0;">`).join('') : '';
+  const imgRow = (images)=> (images&&images.length) ? `<div class="pdf-highlight-images">${images.map(src=>`<img src="${src}" crossorigin="anonymous">`).join('')}</div>` : '';
   // Each section is wrapped in .pdf-block so the export step can measure real
   // block heights and break pages between sections instead of mid-table —
   // see exportPDF(). The masthead is its own block too.
@@ -1741,7 +1741,7 @@ function buildingPdfHTML(bKey){
     <tr><td>${e(d.info.assetCode)}</td><td>${e(d.info.floors)}</td><td>${e(d.info.manager)}</td><td>${e(d.info.contact)}</td></tr></table>`,
 
     `<div class="pdf-sec-title">II. Điểm Nổi Bật Tháng <span style="opacity:.7;font-weight:400;">Monthly Highlights</span></div>
-    ${d.highlights.length? d.highlights.map(h=>`<div class="pdf-note">${h.status==='done'?'✅':'⏳'} ${e(h.content)} ${imgRow(h.images)}</div>`).join('') : '<div class="pdf-note">Không có ghi nhận.</div>'}`,
+    const imgRow = (images)=> (images&&images.length) ? `<div class="pdf-highlight-images">${images.map(src=>`<img src="${src}" crossorigin="anonymous">`).join('')}</div>` : '';
 
     `<div class="pdf-sec-title">III. Vấn Đề Đang Xử Lý <span style="opacity:.7;font-weight:400;">Items Requiring Decision</span></div>
     <table class="pdf-table"><tr><th>Nội dung</th><th>Hướng xử lý</th><th>Phụ trách</th><th>Hạn</th><th>Trạng thái</th></tr>
