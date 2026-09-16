@@ -360,7 +360,7 @@
       </div>
       <div class="actions">
         <button class="btn secondary" onclick="exportPDF('single')">⤓ Xuất PDF (tòa này)</button>
-        <button class="btn" onclick="exportPDF('all')">⤓ Xuất PDF tổng hợp (4 tòa)</button>
+        <button class="btn" id="btnExportAll" onclick="exportPDF('all')">⤓ Xuất PDF tổng hợp (4 tòa)</button>
       </div>
     </div>
     <div id="content"></div>
@@ -753,6 +753,48 @@ function dataFor(bKey, pKey){
   return seedFor(bKey, pKey) || emptyBuildingData();
 }
 
+// A report saved before some field existed in the schema (e.g. an older
+// month's doc from before "vehicle" or the tenant contact/note columns were
+// added) must still load without crashing — every array field is guaranteed
+// to exist, and info/energy/meta always carry every current sub-field.
+// Always run any document just loaded from Firestore through this before it
+// enters STORE, so every read/render/PDF-export codepath downstream can
+// assume the full current shape without its own defensive checks.
+function normalizeData(raw){
+  const base = emptyBuildingData();
+  const d = Object.assign({}, base, raw||{});
+  d.info = Object.assign({}, base.info, (raw&&raw.info)||{});
+  d.energy = Object.assign({}, base.energy, (raw&&raw.energy)||{});
+  d.meta = Object.assign({}, base.meta, (raw&&raw.meta)||{});
+  ['highlights','issues','tenants','complaints','vehicle','tech','maintenance','facilities','contracts','fitout','plan'].forEach(k=>{
+    if(!Array.isArray(d[k])) d[k] = base[k];
+  });
+  return d;
+}
+
+// Loads a building/period's report into STORE if it isn't already cached —
+// used by the consolidated ("tổng hợp 4 tòa") PDF export so it always shows
+// each building's real, current, saved data rather than whatever happened to
+// already be in memory (which, for buildings the current user never opened
+// this session, would otherwise silently be empty/seed data instead of the
+// truth). Never re-fetches STATE.building — the in-memory copy of the report
+// currently being edited is always at least as fresh as Firestore.
+async function ensureLoaded(bKey, pKey){
+  if(!STORE[bKey]) STORE[bKey] = {};
+  if(bKey === STATE.building && STORE[bKey][pKey]) return;
+  if(!FIREBASE_READY){
+    if(!STORE[bKey][pKey]) STORE[bKey][pKey] = seedFor(bKey,pKey) || emptyBuildingData();
+    return;
+  }
+  try{
+    const snap = await db.collection('reports').doc(`${bKey}_${pKey}`).get();
+    STORE[bKey][pKey] = snap.exists ? normalizeData(snap.data()) : (seedFor(bKey,pKey) || emptyBuildingData());
+  }catch(e){
+    console.error('Không tải được báo cáo của', bKey, pKey, e);
+    if(!STORE[bKey][pKey]) STORE[bKey][pKey] = seedFor(bKey,pKey) || emptyBuildingData();
+  }
+}
+
 /* ===================== FIREBASE SETUP =====================
    Fill these in from: Firebase Console → Project settings → General →
    "Your apps" → Web app → SDK setup and configuration → Config.
@@ -780,15 +822,23 @@ if(FIREBASE_READY){
 
 /* ===================== LOGIN ===================== */
 function fillMonthYear(monthSelId, yearSelId){
+  // Defaults to the real current month/year (falling back to the nearest
+  // supported year) instead of a hardcoded 09/2026, so the pre-selected
+  // period doesn't quietly go stale a few months from now.
+  const now = new Date();
+  const curMonth = String(now.getMonth()+1).padStart(2,'0');
+  const years = [2025,2026,2027];
+  const curYear = years.includes(now.getFullYear()) ? now.getFullYear() : years[years.length-1];
+
   const m = document.getElementById(monthSelId);
   m.innerHTML = '';
   for(let i=1;i<=12;i++){
     const v = String(i).padStart(2,'0');
-    m.innerHTML += `<option value="${v}" ${v==='09'?'selected':''}>Tháng ${v}</option>`;
+    m.innerHTML += `<option value="${v}" ${v===curMonth?'selected':''}>Tháng ${v}</option>`;
   }
   const y = document.getElementById(yearSelId);
   y.innerHTML = '';
-  [2025,2026,2027].forEach(x=>y.innerHTML+=`<option value="${x}" ${x===2026?'selected':''}>${x}</option>`);
+  years.forEach(x=>y.innerHTML+=`<option value="${x}" ${x===curYear?'selected':''}>${x}</option>`);
 }
 function showCard(id){
   ['localLoginCard','authLoginCard','forgotCard','periodSelectCard'].forEach(c=>{
@@ -881,7 +931,7 @@ async function enterApp(buildingKey, period, name){
       const snap = await db.collection('reports').doc(docId).get();
       if(!STORE[buildingKey]) STORE[buildingKey] = {};
       if(snap.exists){
-        STORE[buildingKey][period] = snap.data();
+        STORE[buildingKey][period] = normalizeData(snap.data());
       } else {
         const fresh = seedFor(buildingKey, period) || emptyBuildingData();
         fresh.meta.month = period.split('-')[1];
@@ -907,18 +957,24 @@ async function enterApp(buildingKey, period, name){
   document.getElementById('sbBuildingName').textContent = BUILDINGS[buildingKey].name;
   document.getElementById('sbPeriod').textContent = `Tháng ${data().meta.month}/${data().meta.year} · ${data().meta.preparedBy||name}`;
   setSaveStatus(FIREBASE_READY ? 'saved' : 'local');
+  // BQL accounts can only read their own building's reports (firestore.rules) —
+  // hide the 4-building export for them so it isn't a dead/broken button.
+  const canExportAll = !FIREBASE_READY || (CURRENT_USER && CURRENT_USER.role==='admin');
+  document.getElementById('btnExportAll').style.display = canExportAll ? '' : 'none';
 
   buildNav();
   renderSection();
 }
 
 function logout(){
+  flushSave();
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('sidebar').style.display='none';
   document.getElementById('main').style.display='none';
   showCard(FIREBASE_READY ? 'periodSelectCard' : 'localLoginCard');
 }
 function firebaseLogout(){
+  flushSave();
   auth.signOut().then(()=>{
     document.getElementById('login-screen').style.display='flex';
     document.getElementById('sidebar').style.display='none';
@@ -927,10 +983,12 @@ function firebaseLogout(){
 }
 
 /* ===================== AUTOSAVE ===================== */
-// Every meaningful edit ends in a renderSection() call (see all the onchange/
-// onclick handlers throughout this file), so hooking the debounce there means
-// no individual input handler needs to know about Firestore at all.
+// Every meaningful edit ends in either renderSection() or a direct scheduleSave()
+// call (see all the onchange/oninput/onclick handlers throughout this file), so
+// hooking the debounce there means no individual input handler needs to know
+// about Firestore at all.
 let saveTimer = null;
+let pendingSave = null; // {buildingKey, period} captured at schedule time, for flushSave()
 function setSaveStatus(state){
   const dot = document.getElementById('save-dot');
   const txt = document.getElementById('save-text');
@@ -941,27 +999,76 @@ function setSaveStatus(state){
     saving:  {color:'#E8C468', text:'Đang lưu...'},
     saved:   {color:'#7FC79B', text:'Đã lưu ✓'},
     error:   {color:'var(--bad)', text:'Lỗi lưu — kiểm tra mạng'},
+    errorSize: {color:'var(--bad)', text:'Lỗi lưu — báo cáo quá nặng, xoá bớt ảnh'},
   };
   const s = map[state] || map.saved;
   dot.style.background = s.color;
   txt.textContent = s.text;
   txt.style.color = s.color;
 }
+// Writes exactly the report that was being edited when the save was scheduled —
+// buildingKey/period are fixed at schedule time (see scheduleSave), never read
+// live off STATE at fire time, so a user who switches to a different report
+// within the 1.2s debounce window can never have that pending write land in the
+// wrong Firestore document.
+let lastSaveFailed = false; // drives the beforeunload warning below
+async function doSave(buildingKey, period){
+  const payload = STORE[buildingKey] && STORE[buildingKey][period];
+  if(!payload) return;
+  try{
+    await db.collection('reports').doc(`${buildingKey}_${period}`).set(payload);
+    setSaveStatus('saved');
+    lastSaveFailed = false;
+  }catch(e){
+    console.error(e);
+    // Firestore's free-tier ~1MB per-document cap is the one save failure that
+    // isn't a transient network blip and won't fix itself on retry — call it
+    // out specifically (see IMG_MAX_DIM/compressImageToDataURL comment above)
+    // instead of leaving the generic "check your connection" message, which
+    // would send someone down the wrong troubleshooting path.
+    const msg = String((e&&e.message)||'');
+    const looksTooLarge = /longer than|exceeds the maximum|too large|resource-exhausted/i.test(msg) || (e&&e.code==='invalid-argument');
+    setSaveStatus(looksTooLarge ? 'errorSize' : 'error');
+    lastSaveFailed = true;
+    toast(looksTooLarge
+      ? '⚠ Không lưu được: báo cáo vượt giới hạn dung lượng của Firestore (~1MB) — hãy xoá bớt ảnh cũ trong mục Điểm nổi bật / Hệ thống / Bảo trì rồi thử lại.'
+      : '⚠ Không lưu được — kiểm tra kết nối mạng, hệ thống sẽ tự thử lại ở lần sửa tiếp theo.');
+  }
+}
 function scheduleSave(){
   if(!FIREBASE_READY || !STATE.building) return;
+  const buildingKey = STATE.building, period = STATE.period;
   setSaveStatus('saving');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async ()=>{
-    try{
-      const docId = `${STATE.building}_${STATE.period}`;
-      await db.collection('reports').doc(docId).set(data());
-      setSaveStatus('saved');
-    }catch(e){
-      console.error(e);
-      setSaveStatus('error');
-    }
+  pendingSave = {buildingKey, period};
+  saveTimer = setTimeout(()=>{
+    saveTimer = null;
+    pendingSave = null;
+    doSave(buildingKey, period);
   }, 1200);
 }
+// Saves immediately instead of waiting out the debounce — called before logout
+// and page unload so a quick edit followed by leaving never loses that edit.
+function flushSave(){
+  if(saveTimer && pendingSave){
+    clearTimeout(saveTimer);
+    const {buildingKey, period} = pendingSave;
+    saveTimer = null; pendingSave = null;
+    doSave(buildingKey, period);
+  }
+}
+// flushSave() fires the write immediately (an in-flight network request can
+// still be safely lost if the tab genuinely closes — nothing more to do about
+// that from here), and if the last known attempt failed (e.g. offline, or the
+// ~1MB size-limit case) the native "leave site?" prompt gives the person a
+// chance to stay and fix it rather than silently losing that edit.
+window.addEventListener('beforeunload', (e)=>{
+  flushSave();
+  if(lastSaveFailed){
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 /* ===================== NAV ===================== */
 function buildNav(){
@@ -1024,14 +1131,14 @@ function renderInfo(el){
   el.innerHTML += `
     <div class="card">
       <div class="grid2">
-        <div class="field"><label>Địa chỉ</label><input type="text" value="${esc(d.info.address)}" oninput="data().info.address=this.value"></div>
-        <div class="field"><label>Chủ đầu tư</label><input type="text" value="${esc(d.info.investor)}" oninput="data().info.investor=this.value"></div>
+        <div class="field"><label>Địa chỉ</label><input type="text" value="${esc(d.info.address)}" oninput="data().info.address=this.value; scheduleSave()"></div>
+        <div class="field"><label>Chủ đầu tư</label><input type="text" value="${esc(d.info.investor)}" oninput="data().info.investor=this.value; scheduleSave()"></div>
         <div class="field"><label>Tổng diện tích (m²)</label><input type="number" value="${esc(d.info.totalArea)}" oninput="data().info.totalArea=this.value; renderSection()"></div>
-        <div class="field"><label>Sàn cho thuê / tổng</label><input type="text" placeholder="VD: 13/13" value="${esc(d.info.leased)}" oninput="data().info.leased=this.value"></div>
+        <div class="field"><label>Sàn cho thuê / tổng</label><input type="text" placeholder="VD: 13/13" value="${esc(d.info.leased)}" oninput="data().info.leased=this.value; scheduleSave()"></div>
       </div>
       <div class="grid2">
-        <div class="field"><label>Người lập báo cáo</label><input type="text" value="${esc(d.meta.preparedBy)}" oninput="data().meta.preparedBy=this.value"></div>
-        <div class="field"><label>Quản lý vận hành duyệt</label><input type="text" placeholder="Tên người duyệt" value="${esc(d.meta.opsManager)}" oninput="data().meta.opsManager=this.value"></div>
+        <div class="field"><label>Người lập báo cáo</label><input type="text" value="${esc(d.meta.preparedBy)}" oninput="data().meta.preparedBy=this.value; scheduleSave()"></div>
+        <div class="field"><label>Quản lý vận hành duyệt</label><input type="text" placeholder="Tên người duyệt" value="${esc(d.meta.opsManager)}" oninput="data().meta.opsManager=this.value; scheduleSave()"></div>
       </div>
     </div>
     <div class="subhead">Tổng quan tháng ${esc(d.meta.month)}/${esc(d.meta.year)} <span class="en">Monthly overview — tự động tính từ các mục bên dưới</span></div>
@@ -1062,14 +1169,14 @@ function renderHighlights(el){
       <div class="grid2" style="grid-template-columns:160px 1fr;align-items:start;">
         <div class="field">
           <label>Trạng thái</label>
-          <select onchange="data().highlights[${i}].status=this.value">
+          <select onchange="data().highlights[${i}].status=this.value; scheduleSave()">
             <option value="done" ${h.status==='done'?'selected':''}>✅ Hoàn thành</option>
             <option value="pending" ${h.status==='pending'?'selected':''}>⏳ Chưa xong</option>
           </select>
         </div>
         <div class="field">
           <label>Nội dung</label>
-          <textarea oninput="data().highlights[${i}].content=this.value">${esc(h.content)}</textarea>
+          <textarea oninput="data().highlights[${i}].content=this.value; scheduleSave()">${esc(h.content)}</textarea>
         </div>
       </div>
       <label>Hình ảnh</label>
@@ -1097,9 +1204,9 @@ function renderIssues(el){
   if(list.length===0){ body.innerHTML = `<tr><td colspan="6" class="empty-hint">Chưa có vấn đề nào được ghi nhận.</td></tr>`; return; }
   body.innerHTML = list.map((it,i)=>`
     <tr>
-      <td><textarea oninput="data().issues[${i}].content=this.value">${esc(it.content)}</textarea></td>
-      <td><textarea oninput="data().issues[${i}].solution=this.value">${esc(it.solution)}</textarea></td>
-      <td><input type="text" value="${esc(it.owner)}" oninput="data().issues[${i}].owner=this.value"></td>
+      <td><textarea oninput="data().issues[${i}].content=this.value; scheduleSave()">${esc(it.content)}</textarea></td>
+      <td><textarea oninput="data().issues[${i}].solution=this.value; scheduleSave()">${esc(it.solution)}</textarea></td>
+      <td><input type="text" value="${esc(it.owner)}" oninput="data().issues[${i}].owner=this.value; scheduleSave()"></td>
       <td><input type="date" value="${esc(it.deadline)}" onchange="data().issues[${i}].deadline=this.value; renderSection()"></td>
       <td>${statusSelect(`data().issues[${i}].status`, it.status, true)}</td>
       <td><button class="btn danger" onclick="removeItem('issues',${i},'vấn đề')">✕</button></td>
@@ -1147,15 +1254,15 @@ function renderTenants(el){
       return `
       <tr style="${rowBg}">
         <td>${i+1}</td>
-        <td><input type="text" value="${esc(t.name)}" oninput="data().tenants[${i}].name=this.value"></td>
-        <td><input type="text" value="${esc(t.floor)}" style="width:60px" oninput="data().tenants[${i}].floor=this.value"></td>
+        <td><input type="text" value="${esc(t.name)}" oninput="data().tenants[${i}].name=this.value; scheduleSave()"></td>
+        <td><input type="text" value="${esc(t.floor)}" style="width:60px" oninput="data().tenants[${i}].floor=this.value; scheduleSave()"></td>
         <td><input type="number" value="${esc(t.area)}" style="width:70px" onchange="data().tenants[${i}].area=this.value; renderSection()"></td>
-        <td><input type="date" value="${esc(t.startDate)}" onchange="data().tenants[${i}].startDate=this.value"></td>
+        <td><input type="date" value="${esc(t.startDate)}" onchange="data().tenants[${i}].startDate=this.value; scheduleSave()"></td>
         <td><input type="date" value="${esc(t.endDate)}" onchange="data().tenants[${i}].endDate=this.value; renderSection()"></td>
         <td><span class="status-pill ${st.cls}">${st.label}</span></td>
-        <td><input type="text" value="${esc(t.mgmtFee)}" style="width:90px" oninput="data().tenants[${i}].mgmtFee=this.value"></td>
-        <td><input type="text" value="${esc(t.contact)}" oninput="data().tenants[${i}].contact=this.value"></td>
-        <td><input type="text" value="${esc(t.note)}" oninput="data().tenants[${i}].note=this.value"></td>
+        <td><input type="text" value="${esc(t.mgmtFee)}" style="width:90px" oninput="data().tenants[${i}].mgmtFee=this.value; scheduleSave()"></td>
+        <td><input type="text" value="${esc(t.contact)}" oninput="data().tenants[${i}].contact=this.value; scheduleSave()"></td>
+        <td><input type="text" value="${esc(t.note)}" oninput="data().tenants[${i}].note=this.value; scheduleSave()"></td>
         <td><button class="btn danger" onclick="removeItem('tenants',${i},'khách thuê')">✕</button></td>
       </tr>`;
     }).join('');
@@ -1173,9 +1280,9 @@ function renderTenants(el){
   if(cl.length===0){ cbody.innerHTML = `<tr><td colspan="5" class="empty-hint">Chưa có phản ánh nào trong tháng.</td></tr>`; return; }
   cbody.innerHTML = cl.map((c,i)=>`
     <tr>
-      <td><input type="text" value="${esc(c.content)}" oninput="data().complaints[${i}].content=this.value"></td>
-      <td><input type="text" value="${esc(c.from)}" oninput="data().complaints[${i}].from=this.value"></td>
-      <td><input type="date" value="${esc(c.date)}" onchange="data().complaints[${i}].date=this.value"></td>
+      <td><input type="text" value="${esc(c.content)}" oninput="data().complaints[${i}].content=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(c.from)}" oninput="data().complaints[${i}].from=this.value; scheduleSave()"></td>
+      <td><input type="date" value="${esc(c.date)}" onchange="data().complaints[${i}].date=this.value; scheduleSave()"></td>
       <td>
         <select onchange="data().complaints[${i}].status=this.value; renderSection()">
           <option value="done" ${c.status==='done'?'selected':''}>✅ Đã xử lý</option>
@@ -1234,13 +1341,13 @@ function renderVehicle(el){
   body.innerHTML = list.map((v,i)=>`
     <tr>
       <td>${i+1}</td>
-      <td><input type="text" value="${esc(v.company)}" oninput="data().vehicle[${i}].company=this.value"></td>
-      <td><input type="text" value="${esc(v.floor)}" style="width:60px" oninput="data().vehicle[${i}].floor=this.value"></td>
+      <td><input type="text" value="${esc(v.company)}" oninput="data().vehicle[${i}].company=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(v.floor)}" style="width:60px" oninput="data().vehicle[${i}].floor=this.value; scheduleSave()"></td>
       <td><input type="number" value="${esc(v.motoBuilding)}" style="width:64px" onchange="data().vehicle[${i}].motoBuilding=this.value; renderSection()"></td>
       <td><input type="number" value="${esc(v.motoOutside)}" style="width:64px" onchange="data().vehicle[${i}].motoOutside=this.value; renderSection()"></td>
       <td><input type="number" value="${esc(v.carBuilding)}" style="width:64px" onchange="data().vehicle[${i}].carBuilding=this.value; renderSection()"></td>
       <td><input type="number" value="${esc(v.carOutside)}" style="width:64px" onchange="data().vehicle[${i}].carOutside=this.value; renderSection()"></td>
-      <td><input type="text" value="${esc(v.note)}" oninput="data().vehicle[${i}].note=this.value"></td>
+      <td><input type="text" value="${esc(v.note)}" oninput="data().vehicle[${i}].note=this.value; scheduleSave()"></td>
       <td><button class="btn danger" onclick="removeItem('vehicle',${i},'công ty')">✕</button></td>
     </tr>`).join('');
 }
@@ -1253,9 +1360,9 @@ function renderTech(el){
   el.innerHTML += list.map((t,i)=>`
     <div class="card" style="${t.status==='issue'?'border-color:var(--bad);background:#fbeeec;':''}">
       <div class="grid4" style="grid-template-columns:1fr 1.6fr 1.6fr 1fr;">
-        <div class="field"><label>Hệ thống</label><input type="text" value="${esc(t.system)}" oninput="data().tech[${i}].system=this.value"></div>
-        <div class="field"><label>Hoạt động trong tháng</label><input type="text" value="${esc(t.activity)}" oninput="data().tech[${i}].activity=this.value"></div>
-        <div class="field"><label>Sự cố / hư hỏng</label><input type="text" value="${esc(t.issue)}" oninput="data().tech[${i}].issue=this.value"></div>
+        <div class="field"><label>Hệ thống</label><input type="text" value="${esc(t.system)}" oninput="data().tech[${i}].system=this.value; scheduleSave()"></div>
+        <div class="field"><label>Hoạt động trong tháng</label><input type="text" value="${esc(t.activity)}" oninput="data().tech[${i}].activity=this.value; scheduleSave()"></div>
+        <div class="field"><label>Sự cố / hư hỏng</label><input type="text" value="${esc(t.issue)}" oninput="data().tech[${i}].issue=this.value; scheduleSave()"></div>
         <div class="field"><label>Trạng thái</label>
           <select onchange="data().tech[${i}].status=this.value; renderSection()">
             <option value="ok" ${t.status==='ok'?'selected':''}>🟢 Bình thường</option>
@@ -1282,19 +1389,19 @@ function renderMaintenance(el){
   list.forEach((m,i)=>{
     el.innerHTML += `
     <div class="card">
-      <div class="field"><label>Nội dung</label><input type="text" value="${esc(m.content)}" oninput="data().maintenance[${i}].content=this.value"></div>
+      <div class="field"><label>Nội dung</label><input type="text" value="${esc(m.content)}" oninput="data().maintenance[${i}].content=this.value; scheduleSave()"></div>
       <div class="grid4">
-        <div class="field"><label>Nhà thầu</label><input type="text" value="${esc(m.contractor)}" oninput="data().maintenance[${i}].contractor=this.value"></div>
-        <div class="field"><label>Ngày thực hiện</label><input type="date" value="${esc(m.dateStart)}" onchange="data().maintenance[${i}].dateStart=this.value"></div>
-        <div class="field"><label>Ngày hoàn thành</label><input type="date" value="${esc(m.dateDone)}" onchange="data().maintenance[${i}].dateDone=this.value"></div>
+        <div class="field"><label>Nhà thầu</label><input type="text" value="${esc(m.contractor)}" oninput="data().maintenance[${i}].contractor=this.value; scheduleSave()"></div>
+        <div class="field"><label>Ngày thực hiện</label><input type="date" value="${esc(m.dateStart)}" onchange="data().maintenance[${i}].dateStart=this.value; scheduleSave()"></div>
+        <div class="field"><label>Ngày hoàn thành</label><input type="date" value="${esc(m.dateDone)}" onchange="data().maintenance[${i}].dateDone=this.value; scheduleSave()"></div>
         <div class="field"><label>Kết quả</label>
-          <select onchange="data().maintenance[${i}].result=this.value">
+          <select onchange="data().maintenance[${i}].result=this.value; scheduleSave()">
             <option value="ok" ${m.result==='ok'?'selected':''}>🟢 Bình thường</option>
             <option value="issue" ${m.result==='issue'?'selected':''}>🚨 Cần xử lý</option>
           </select>
         </div>
       </div>
-      <div class="field"><label>Ghi nhận</label><textarea oninput="data().maintenance[${i}].note=this.value">${esc(m.note)}</textarea></div>
+      <div class="field"><label>Ghi nhận</label><textarea oninput="data().maintenance[${i}].note=this.value; scheduleSave()">${esc(m.note)}</textarea></div>
       <label>Hình ảnh</label>
       <div class="thumbs" id="thumbs-maintenance-${i}"></div>
       <div class="upload-zone" onclick="document.getElementById('file-maintenance-${i}').click()">+ Tải ảnh lên</div>
@@ -1360,10 +1467,10 @@ function renderFacilities(el){
   if(list.length===0){ body.innerHTML = `<tr><td colspan="6" class="empty-hint">Chưa có dịch vụ nào.</td></tr>`; return; }
   body.innerHTML = list.map((f,i)=>`
     <tr style="${f.rating==='bad'?'background:#fbeeec;':''}">
-      <td><input type="text" value="${esc(f.service)}" oninput="data().facilities[${i}].service=this.value"></td>
-      <td><input type="text" value="${esc(f.contractor)}" oninput="data().facilities[${i}].contractor=this.value"></td>
+      <td><input type="text" value="${esc(f.service)}" oninput="data().facilities[${i}].service=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(f.contractor)}" oninput="data().facilities[${i}].contractor=this.value; scheduleSave()"></td>
       <td><input type="text" placeholder="VD: 4 vị trí" value="${esc(f.positions)}" onchange="data().facilities[${i}].positions=this.value; renderSection()"></td>
-      <td><input type="text" value="${esc(f.work)}" oninput="data().facilities[${i}].work=this.value"></td>
+      <td><input type="text" value="${esc(f.work)}" oninput="data().facilities[${i}].work=this.value; scheduleSave()"></td>
       <td>
         <select onchange="data().facilities[${i}].rating=this.value; renderSection()">
           <option value="good" ${f.rating==='good'?'selected':''}>✅ Đạt (80–100%)</option>
@@ -1397,9 +1504,9 @@ function renderContracts(el){
     const st = contractStatusOf(c.to);
     const rowBg = st.key==='expired' ? 'background:#fbeeec;' : st.key==='ending' ? 'background:#faf3e4;' : '';
     return `<tr style="${rowBg}">
-      <td><input type="text" value="${esc(c.name)}" oninput="data().contracts[${i}].name=this.value"></td>
-      <td><input type="text" value="${esc(c.contractor)}" oninput="data().contracts[${i}].contractor=this.value"></td>
-      <td><input type="date" value="${esc(c.from)}" onchange="data().contracts[${i}].from=this.value"></td>
+      <td><input type="text" value="${esc(c.name)}" oninput="data().contracts[${i}].name=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(c.contractor)}" oninput="data().contracts[${i}].contractor=this.value; scheduleSave()"></td>
+      <td><input type="date" value="${esc(c.from)}" onchange="data().contracts[${i}].from=this.value; scheduleSave()"></td>
       <td><input type="date" value="${esc(c.to)}" onchange="data().contracts[${i}].to=this.value; renderSection()"></td>
       <td><span class="status-pill ${st.cls}">${st.label}</span></td>
       <td><button class="btn danger" onclick="removeItem('contracts',${i},'hợp đồng')">✕</button></td>
@@ -1423,11 +1530,11 @@ function renderFitout(el){
     const pct = Math.max(0, Math.min(100, safeNum(f.progress)));
     const autoStatus = pct>=100 ? 'Hoàn thành' : (pct>0 ? 'Đang thi công' : 'Chưa bắt đầu');
     return `<tr>
-      <td><input type="text" value="${esc(f.tenant)}" oninput="data().fitout[${i}].tenant=this.value"></td>
-      <td><input type="text" value="${esc(f.floor)}" style="width:60px" oninput="data().fitout[${i}].floor=this.value"></td>
-      <td><input type="text" value="${esc(f.contractor)}" oninput="data().fitout[${i}].contractor=this.value"></td>
-      <td><input type="date" value="${esc(f.start)}" onchange="data().fitout[${i}].start=this.value"></td>
-      <td><input type="date" value="${esc(f.end)}" onchange="data().fitout[${i}].end=this.value"></td>
+      <td><input type="text" value="${esc(f.tenant)}" oninput="data().fitout[${i}].tenant=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(f.floor)}" style="width:60px" oninput="data().fitout[${i}].floor=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(f.contractor)}" oninput="data().fitout[${i}].contractor=this.value; scheduleSave()"></td>
+      <td><input type="date" value="${esc(f.start)}" onchange="data().fitout[${i}].start=this.value; scheduleSave()"></td>
+      <td><input type="date" value="${esc(f.end)}" onchange="data().fitout[${i}].end=this.value; scheduleSave()"></td>
       <td>
         <input type="number" min="0" max="100" value="${esc(f.progress)}" style="width:70px" onchange="data().fitout[${i}].progress=this.value; renderSection()">
         <div style="height:5px;background:var(--sand);border-radius:3px;margin-top:5px;"><div style="height:5px;width:${pct}%;background:var(--gold);border-radius:3px;"></div></div>
@@ -1453,10 +1560,10 @@ function renderPlan(el){
     const flag = p.priority==='high' && p.status!=='done';
     return `
     <tr${flag?' style="background:#fbeeec;"':''}>
-      <td><input type="text" value="${esc(p.item)}" oninput="data().plan[${i}].item=this.value"></td>
-      <td><input type="text" value="${esc(p.content)}" oninput="data().plan[${i}].content=this.value"></td>
-      <td><input type="text" value="${esc(p.owner)}" oninput="data().plan[${i}].owner=this.value"></td>
-      <td><input type="date" value="${esc(p.date)}" onchange="data().plan[${i}].date=this.value"></td>
+      <td><input type="text" value="${esc(p.item)}" oninput="data().plan[${i}].item=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(p.content)}" oninput="data().plan[${i}].content=this.value; scheduleSave()"></td>
+      <td><input type="text" value="${esc(p.owner)}" oninput="data().plan[${i}].owner=this.value; scheduleSave()"></td>
+      <td><input type="date" value="${esc(p.date)}" onchange="data().plan[${i}].date=this.value; scheduleSave()"></td>
       <td>
         <select onchange="data().plan[${i}].priority=this.value; renderSection()">
           <option value="high" ${p.priority==='high'?'selected':''}>🔴 Cao</option>
@@ -1478,7 +1585,7 @@ function addPlan(){ data().plan.push({item:'',content:'',owner:'',date:'',priori
 
 /* ===================== SHARED HELPERS ===================== */
 function statusSelect(bindExpr, val, withRerender){
-  return `<select onchange="${bindExpr}=this.value${withRerender?'; renderSection()':''}">
+  return `<select onchange="${bindExpr}=this.value${withRerender?'; renderSection()':'; scheduleSave()'}">
     <option value="done" ${val==='done'?'selected':''}>✅ Hoàn thành</option>
     <option value="pending" ${val==='pending'?'selected':''}>⏳ Chưa xong</option>
   </select>`;
@@ -1702,9 +1809,23 @@ function buildingPdfHTML(bKey){
 
 async function exportPDF(mode){
   if(!STATE.building){ toast('Vui lòng đăng nhập trước'); return; }
+  if(mode==='all' && FIREBASE_READY && CURRENT_USER && CURRENT_USER.role!=='admin'){
+    // Firestore rules only grant a BQL account read access to its own building's
+    // reports (see firestore.rules) — exporting the other 3 would either show
+    // stale/empty placeholder data or fail outright, so this is refused up front
+    // with a clear message rather than producing a wrong or broken PDF.
+    toast('Chỉ tài khoản admin mới xuất được PDF tổng hợp 4 tòa.');
+    return;
+  }
   toast('Đang tạo PDF...');
   const root = document.getElementById('pdf-root');
   const keys = mode==='single' ? [STATE.building] : Object.keys(BUILDINGS);
+  if(mode==='all'){
+    // Pull every building's real current report before rendering — without this,
+    // any building the admin hasn't personally opened this session would render
+    // from empty/seed data instead of what BQL staff actually saved.
+    await Promise.all(keys.map(k=>ensureLoaded(k, STATE.period)));
+  }
   root.innerHTML = keys.map(k=>buildingPdfHTML(k)).join('');
   await new Promise(r=>setTimeout(r,80));
 
