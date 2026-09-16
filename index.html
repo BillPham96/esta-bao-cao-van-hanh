@@ -1133,7 +1133,7 @@ function renderInfo(el){
       <div class="grid2">
         <div class="field"><label>Địa chỉ</label><input type="text" value="${esc(d.info.address)}" oninput="data().info.address=this.value; scheduleSave()"></div>
         <div class="field"><label>Chủ đầu tư</label><input type="text" value="${esc(d.info.investor)}" oninput="data().info.investor=this.value; scheduleSave()"></div>
-        <div class="field"><label>Tổng diện tích (m²)</label><input type="number" value="${esc(d.info.totalArea)}" oninput="data().info.totalArea=this.value; renderSection()"></div>
+        <div class="field"><label>Tổng diện tích (m²)</label><input type="text" inputmode="decimal" value="${esc(d.info.totalArea)}" oninput="data().info.totalArea=this.value; renderSection()"></div>
         <div class="field"><label>Sàn cho thuê / tổng</label><input type="text" placeholder="VD: 13/13" value="${esc(d.info.leased)}" oninput="data().info.leased=this.value; scheduleSave()"></div>
       </div>
       <div class="grid2">
@@ -1256,7 +1256,7 @@ function renderTenants(el){
         <td>${i+1}</td>
         <td><input type="text" value="${esc(t.name)}" oninput="data().tenants[${i}].name=this.value; scheduleSave()"></td>
         <td><input type="text" value="${esc(t.floor)}" style="width:60px" oninput="data().tenants[${i}].floor=this.value; scheduleSave()"></td>
-        <td><input type="number" value="${esc(t.area)}" style="width:70px" onchange="data().tenants[${i}].area=this.value; renderSection()"></td>
+        <td><input type="text" inputmode="decimal" value="${esc(t.area)}" style="width:70px" onchange="data().tenants[${i}].area=this.value; renderSection()"></td>
         <td><input type="date" value="${esc(t.startDate)}" onchange="data().tenants[${i}].startDate=this.value; scheduleSave()"></td>
         <td><input type="date" value="${esc(t.endDate)}" onchange="data().tenants[${i}].endDate=this.value; renderSection()"></td>
         <td><span class="status-pill ${st.cls}">${st.label}</span></td>
@@ -1343,10 +1343,10 @@ function renderVehicle(el){
       <td>${i+1}</td>
       <td><input type="text" value="${esc(v.company)}" oninput="data().vehicle[${i}].company=this.value; scheduleSave()"></td>
       <td><input type="text" value="${esc(v.floor)}" style="width:60px" oninput="data().vehicle[${i}].floor=this.value; scheduleSave()"></td>
-      <td><input type="number" value="${esc(v.motoBuilding)}" style="width:64px" onchange="data().vehicle[${i}].motoBuilding=this.value; renderSection()"></td>
-      <td><input type="number" value="${esc(v.motoOutside)}" style="width:64px" onchange="data().vehicle[${i}].motoOutside=this.value; renderSection()"></td>
-      <td><input type="number" value="${esc(v.carBuilding)}" style="width:64px" onchange="data().vehicle[${i}].carBuilding=this.value; renderSection()"></td>
-      <td><input type="number" value="${esc(v.carOutside)}" style="width:64px" onchange="data().vehicle[${i}].carOutside=this.value; renderSection()"></td>
+      <td><input type="text" inputmode="decimal" value="${esc(v.motoBuilding)}" style="width:64px" onchange="data().vehicle[${i}].motoBuilding=this.value; renderSection()"></td>
+      <td><input type="text" inputmode="decimal" value="${esc(v.motoOutside)}" style="width:64px" onchange="data().vehicle[${i}].motoOutside=this.value; renderSection()"></td>
+      <td><input type="text" inputmode="decimal" value="${esc(v.carBuilding)}" style="width:64px" onchange="data().vehicle[${i}].carBuilding=this.value; renderSection()"></td>
+      <td><input type="text" inputmode="decimal" value="${esc(v.carOutside)}" style="width:64px" onchange="data().vehicle[${i}].carOutside=this.value; renderSection()"></td>
       <td><input type="text" value="${esc(v.note)}" oninput="data().vehicle[${i}].note=this.value; scheduleSave()"></td>
       <td><button class="btn danger" onclick="removeItem('vehicle',${i},'công ty')">✕</button></td>
     </tr>`).join('');
@@ -1430,8 +1430,8 @@ function renderEnergy(el){
       const color = diff<=0?'var(--forest)':'var(--bad)';
       return `<tr>
         <td><b>${r.label}</b><br><span style="color:var(--bronze);font-size:11px;">${r.en}</span></td>
-        <td><input type="number" value="${esc(e[r.key+'Prev'])}" onchange="data().energy['${r.key}Prev']=this.value; renderSection()"></td>
-        <td><input type="number" value="${esc(e[r.key+'Cur'])}" onchange="data().energy['${r.key}Cur']=this.value; renderSection()"></td>
+        <td><input type="text" inputmode="decimal" value="${esc(e[r.key+'Prev'])}" onchange="data().energy['${r.key}Prev']=this.value; renderSection()"></td>
+        <td><input type="text" inputmode="decimal" value="${esc(e[r.key+'Cur'])}" onchange="data().energy['${r.key}Cur']=this.value; renderSection()"></td>
         <td style="color:${color};font-weight:700;">${diff>=0?'+':''}${diff.toFixed(0)} (${pct}%)</td>
         <td>${r.unit}</td>
       </tr>`;
@@ -1536,7 +1536,7 @@ function renderFitout(el){
       <td><input type="date" value="${esc(f.start)}" onchange="data().fitout[${i}].start=this.value; scheduleSave()"></td>
       <td><input type="date" value="${esc(f.end)}" onchange="data().fitout[${i}].end=this.value; scheduleSave()"></td>
       <td>
-        <input type="number" min="0" max="100" value="${esc(f.progress)}" style="width:70px" onchange="data().fitout[${i}].progress=this.value; renderSection()">
+        <input type="text" inputmode="decimal" value="${esc(f.progress)}" style="width:70px" onchange="data().fitout[${i}].progress=this.value; renderSection()">
         <div style="height:5px;background:var(--sand);border-radius:3px;margin-top:5px;"><div style="height:5px;width:${pct}%;background:var(--gold);border-radius:3px;"></div></div>
       </td>
       <td><span class="status-pill ${pct>=100?'status-ok':'status-warn'}">${autoStatus}</span></td>
