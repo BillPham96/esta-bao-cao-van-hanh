@@ -1740,7 +1740,8 @@ function buildingPdfHTML(bKey){
     <table class="pdf-table" style="margin-top:6px;"><tr><th>Mã tài sản</th><th>Số tầng</th><th>Người quản lý</th><th>Liên hệ</th></tr>
     <tr><td>${e(d.info.assetCode)}</td><td>${e(d.info.floors)}</td><td>${e(d.info.manager)}</td><td>${e(d.info.contact)}</td></tr></table>`,
 
-    `<div class="pdf-sec-title">II. Điểm Nổi Bật Tháng <span style="opacity:.7;font-weight:400;">Monthly Highlights
+    `<div class="pdf-sec-title">II. Điểm Nổi Bật Tháng <span style="opacity:.7;font-weight:400;">Monthly Highlights</span></div>
+    ${d.highlights.length? d.highlights.map(h=>`<div class="pdf-highlight-item${h.status==='done'?'':' pending'}"><div class="pdf-highlight-text">${h.status==='done'?'✅':'⏳'} ${e(h.content)}</div>${imgRow(h.images)}</div>`).join('') : '<div class="pdf-note">Không có ghi nhận.</div>'}`,
 
     `<div class="pdf-sec-title">III. Vấn Đề Đang Xử Lý <span style="opacity:.7;font-weight:400;">Items Requiring Decision</span></div>
     <table class="pdf-table"><tr><th>Nội dung</th><th>Hướng xử lý</th><th>Phụ trách</th><th>Hạn</th><th>Trạng thái</th></tr>
