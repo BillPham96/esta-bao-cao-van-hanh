@@ -122,7 +122,7 @@
   .card{background:linear-gradient(180deg,#fffdf9 0%,#fff 100%);border:1px solid var(--sand);border-radius:14px;padding:18px 20px;margin-bottom:16px;box-shadow:0 10px 24px rgba(63,48,30,.04);}
   .grid2{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:18px;}
   .grid3{display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:18px;}
-  .grid4{display:grid;grid-template-columns:repeat(4,minmax(180px,1fr));gap:16px;}
+  .grid4{display:grid;grid-template-columns:repeat(4,minmax(180px,1fr));gap:16px;} .login-card .grid2{grid-template-columns:1fr 1fr;} /* fix: Năm box overflowed the login card because .grid2's 220px column floor didn't fit the narrow card */
 
   table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--sand);border-radius:12px;overflow:hidden;font-size:13px;box-shadow:0 8px 22px rgba(63,48,30,.03);}
   thead th{background:var(--espresso);color:var(--ivory);text-align:left;padding:10px 12px;font-weight:700;font-size:11px;letter-spacing:.04em;text-transform:uppercase;}
